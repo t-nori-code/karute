@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="個人カルテ">
+  <meta name="theme-color" content="#0f172a">
+  <title>個人カルテ</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { background: #0f172a; overscroll-behavior: none; }
+    input, textarea, select, button { font-family: 'Hiragino Sans', 'Noto Sans JP', sans-serif; }
+    ::-webkit-scrollbar { display: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // localStorage を window.storage 形式でラップ
+    window.storage = {
+      get: (key) => {
+        try {
+          const val = localStorage.getItem(key);
+          return Promise.resolve(val !== null ? { value: val } : null);
+        } catch(e) { return Promise.resolve(null); }
+      },
+      set: (key, value) => {
+        try { localStorage.setItem(key, value); } catch(e) {}
+        return Promise.resolve();
+      }
+    };
+
+    // ① 仕事志向（第一優先）
+    const WORK_FIELDS = [
+      { key: "仕事の目的・Why",       icon: "🎯", placeholder: "なんのために働いているか。お金、承認、成長、社会貢献…" },
+      { key: "モチベーションの源",    icon: "🔥", placeholder: "何があると燃えるか。数字、感謝、チームワーク…" },
+      { key: "キャリアの方向性",      icon: "🚀", placeholder: "将来なりたい姿、挑戦したいこと" },
+      { key: "得意分野",              icon: "💪", placeholder: "強み、人より得意なこと" },
+      { key: "苦手分野",              icon: "😅", placeholder: "苦手、避けがちなこと" },
+      { key: "成功体験",              icon: "🏆", placeholder: "誇りに思う実績、自慢の仕事" },
+      { key: "今困っていること",      icon: "😟", placeholder: "直近の悩み、課題" },
+      { key: "性格・こだわり",        icon: "🧠", placeholder: "仕事スタイル、口癖、判断軸" },
+    ];
+
+    // ② プライベート（第二優先）
+    const LIFE_FIELDS = [
+      { key: "婚姻状況",    icon: "💍", type: "select", options: ["未婚", "既婚", "離婚・別居", "不明"] },
+      { key: "子供",        icon: "👶", type: "text",   placeholder: "例：長女5歳、長男2歳" },
+      { key: "育児状況",    icon: "🍼", type: "text",   placeholder: "例：保育園送迎あり、時短勤務中" },
+      { key: "介護状況",    icon: "🏥", type: "text",   placeholder: "例：親の介護あり、週2回通院付き添い" },
+      { key: "パートナー",  icon: "🤝", type: "text",   placeholder: "例：共働き、専業主婦（夫）" },
+      { key: "住まい",      icon: "🏠", type: "text",   placeholder: "例：持ち家、実家同居" },
+      { key: "休日の過ごし方", icon: "🌿", type: "text", placeholder: "趣味、よく行く場所" },
+      { key: "人間関係",    icon: "👥", type: "text",   placeholder: "家族構成、大切な人" },
+    ];
+
+    const ALL_FIELDS = [...WORK_FIELDS, ...LIFE_FIELDS];
+
+    const TABS = [
+      { id: "work", label: "🎯 仕事志向", fields: WORK_FIELDS },
+      { id: "life", label: "🏠 プライベート", fields: LIFE_FIELDS },
+    ];
+
+    const TAGS = ["仕事", "プライベート", "販売店", "客先", "家族", "友人"];
+    const TAG_COLORS = {
+      "仕事":"#0ea5e9","プライベート":"#a855f7","販売店":"#f59e0b",
+      "客先":"#10b981","家族":"#f43f5e","友人":"#64748b"
+    };
+    const STORAGE_KEY = "karute-v3";
+    const tagColor = t => TAG_COLORS[t] || "#64748b";
+    const initials = n => n ? n.slice(0, 2) : "？";
+    const emptyPerson = () => ({
+      id: Date.now(), name: "", company: "", role: "", tag: "仕事", lastMet: "",
+      fields: Object.fromEntries(ALL_FIELDS.map(f => [f.key, ""])),
+      createdAt: new Date().toISOString(),
+    });
+
+    function KaruteApp() {
+      const [people, setPeople]     = useState([]);
+      const [view, setView]         = useState("list");
+      const [selected, setSelected] = useState(null);
+      const [editData, setEditData] = useState(null);
+      const [search, setSearch]     = useState("");
+      const [activeTab, setActiveTab] = useState("work");
+
+      useEffect(() => {
+        (async () => {
+          try { const r = await window.storage.get(STORAGE_KEY); if (r) setPeople(JSON.parse(r.value)); } catch {}
+        })();
+      }, []);
+
+      const persist = async (u) => { setPeople(u); try { await window.storage.set(STORAGE_KEY, JSON.stringify(u)); } catch {} };
+      const openNew    = () => { setEditData(emptyPerson()); setActiveTab("work"); setView("edit"); };
+      const openDetail = (p) => { setSelected(p); setActiveTab("work"); setView("detail"); };
+      const openEdit   = (p) => { setEditData({...p, fields:{...p.fields}}); setActiveTab("work"); setView("edit"); };
+      const savePerson = async () => {
+        if (!editData.name.trim()) return;
+        const exists = people.find(p => p.id === editData.id);
+        const u = exists ? people.map(p => p.id === editData.id ? editData : p) : [editData, ...people];
+        await persist(u); setSelected(editData); setView("detail");
+      };
+      const deletePerson = async (id) => { await persist(people.filter(p => p.id !== id)); setView("list"); };
+      const setF = (key, val) => setEditData(prev => ({...prev, fields:{...prev.fields, [key]: val}}));
+      const setMeta = (key, val) => setEditData(prev => ({...prev, [key]: val}));
+
+      const filtered = people.filter(p =>
+        p.name.toLowerCase().includes(search.toLowerCase()) ||
+        (p.company||"").toLowerCase().includes(search.toLowerCase()) ||
+        (p.role||"").toLowerCase().includes(search.toLowerCase())
+      );
+
+      // ── LIST ───────────────────────────────────────────
+      if (view === "list") return (
+        <div style={S.root}>
+          <div style={S.header}>
+            <div>
+              <div style={S.subLabel}>PERSONAL KARUTE</div>
+              <div style={S.title}>個人カルテ <span style={{fontSize:14,color:"#475569"}}>{people.length}人</span></div>
+            </div>
+            <button onClick={openNew} style={S.addBtn}>＋ 追加</button>
+          </div>
+          <div style={{padding:"0 16px 8px"}}>
+            <input value={search} onChange={e=>setSearch(e.target.value)}
+              placeholder="名前・会社・役職で検索..." style={{...S.input,marginBottom:0}} />
+          </div>
+          <div style={S.content}>
+            {filtered.length === 0 && (
+              <div style={S.empty}>
+                <div style={{fontSize:40,marginBottom:10}}>👤</div>
+                <div style={{fontSize:13}}>{search?"見つかりません":"まだカルテがありません"}</div>
+              </div>
+            )}
+            {filtered.map(p => {
+              const workFilled = WORK_FIELDS.filter(f => p.fields[f.key]).length;
+              const why = p.fields["仕事の目的・Why"];
+              const motive = p.fields["モチベーションの源"];
+              return (
+                <div key={p.id} onClick={()=>openDetail(p)} style={S.card}>
+                  <div style={{...S.avatar, background:tagColor(p.tag)+"33", color:tagColor(p.tag)}}>{initials(p.name)}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:2}}>
+                      <span style={S.cardName}>{p.name}</span>
+                      <span style={{...S.badge, background:tagColor(p.tag)+"22", color:tagColor(p.tag)}}>{p.tag}</span>
+                    </div>
+                    <div style={{color:"#64748b",fontSize:12}}>{[p.company,p.role].filter(Boolean).join(" · ")}</div>
+                    {why && <div style={{color:"#94a3b8",fontSize:11,marginTop:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🎯 {why}</div>}
+                    {!why && motive && <div style={{color:"#94a3b8",fontSize:11,marginTop:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🔥 {motive}</div>}
+                    <div style={{marginTop:6,display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{flex:1,height:4,background:"#0f172a",borderRadius:2}}>
+                        <div style={{width:(workFilled/WORK_FIELDS.length*100)+"%",height:"100%",background:tagColor(p.tag),borderRadius:2}} />
+                      </div>
+                      <span style={{color:"#475569",fontSize:10}}>志向 {workFilled}/{WORK_FIELDS.length}</span>
+                    </div>
+                  </div>
+                  <span style={{color:"#334155",fontSize:18}}>›</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+
+      // ── DETAIL ─────────────────────────────────────────
+      if (view === "detail" && selected) {
+        const p = people.find(x=>x.id===selected.id) || selected;
+        const currentFields = TABS.find(t=>t.id===activeTab)?.fields || WORK_FIELDS;
+        const filled = currentFields.filter(f => p.fields[f.key]);
+        const empty  = currentFields.filter(f => !p.fields[f.key]);
+
+        return (
+          <div style={S.root}>
+            <div style={S.header}>
+              <button onClick={()=>setView("list")} style={S.backBtn}>‹ 一覧</button>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>openEdit(p)} style={S.editBtn}>編集</button>
+                <button onClick={()=>{if(window.confirm("削除しますか？"))deletePerson(p.id);}} style={S.delBtn}>削除</button>
+              </div>
+            </div>
+
+            <div style={{padding:"0 16px 12px",display:"flex",gap:14,alignItems:"center"}}>
+              <div style={{...S.avatarLg, background:tagColor(p.tag)+"33", color:tagColor(p.tag)}}>{initials(p.name)}</div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:21,fontWeight:700,color:"#f8fafc"}}>{p.name}</div>
+                <div style={{color:"#64748b",fontSize:13,marginTop:2}}>{[p.company,p.role].filter(Boolean).join(" · ")}</div>
+                <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
+                  <span style={{...S.badge,background:tagColor(p.tag)+"22",color:tagColor(p.tag)}}>{p.tag}</span>
+                  {p.lastMet && <span style={{...S.badge,background:"#1e293b",color:"#64748b"}}>最終: {p.lastMet}</span>}
+                </div>
+              </div>
+            </div>
+
+            {(p.fields["仕事の目的・Why"] || p.fields["モチベーションの源"]) && (
+              <div style={{margin:"0 16px 12px",background:"#0f172a",borderRadius:12,padding:"12px 14px",borderLeft:"3px solid #0ea5e9"}}>
+                {p.fields["仕事の目的・Why"] && (
+                  <div style={{marginBottom:p.fields["モチベーションの源"]?8:0}}>
+                    <div style={{color:"#475569",fontSize:10,marginBottom:3}}>🎯 仕事の目的</div>
+                    <div style={{color:"#f1f5f9",fontSize:13,lineHeight:1.5}}>{p.fields["仕事の目的・Why"]}</div>
+                  </div>
+                )}
+                {p.fields["モチベーションの源"] && (
+                  <div>
+                    <div style={{color:"#475569",fontSize:10,marginBottom:3}}>🔥 モチベーション</div>
+                    <div style={{color:"#f1f5f9",fontSize:13,lineHeight:1.5}}>{p.fields["モチベーションの源"]}</div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div style={{display:"flex",margin:"0 16px 12px",background:"#1e293b",borderRadius:10,padding:3}}>
+              {TABS.map(t=>(
+                <button key={t.id} onClick={()=>setActiveTab(t.id)}
+                  style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:activeTab===t.id?"#0f172a":"transparent",color:activeTab===t.id?"#f1f5f9":"#64748b",fontSize:12,fontWeight:activeTab===t.id?700:400,cursor:"pointer"}}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            <div style={S.content}>
+              {filled.map(f=>(
+                <div key={f.key} style={S.detailCard}>
+                  <div style={S.dLabel}><span>{f.icon}</span> {f.key}</div>
+                  <div style={S.dVal}>{p.fields[f.key]}</div>
+                </div>
+              ))}
+              {empty.length>0 && (
+                <>
+                  <div style={{color:"#334155",fontSize:11,margin:"10px 0 6px"}}>未入力 ({empty.length})</div>
+                  {empty.map(f=>(
+                    <div key={f.key} onClick={()=>openEdit(p)} style={{...S.detailCard,opacity:0.35,cursor:"pointer"}}>
+                      <div style={S.dLabel}><span>{f.icon}</span> {f.key}</div>
+                      <div style={{color:"#334155",fontSize:12}}>タップして入力...</div>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      // ── EDIT ────────────────────────────────────────────
+      if (view === "edit" && editData) {
+        const isNew = !people.find(p=>p.id===editData.id);
+        const ready = editData.name.trim().length > 0;
+        const currentFields = TABS.find(t=>t.id===activeTab)?.fields || WORK_FIELDS;
+
+        return (
+          <div style={S.root}>
+            <div style={S.header}>
+              <button onClick={()=>setView(isNew?"list":"detail")} style={S.backBtn}>‹ 戻る</button>
+              <div style={S.subLabel}>{isNew?"新規カルテ":"編集"}</div>
+            </div>
+            <div style={S.content}>
+              <Lbl>名前 *</Lbl>
+              <input value={editData.name} onChange={e=>setMeta("name",e.target.value)} placeholder="田中 太郎" style={S.input} />
+              <div style={{display:"flex",gap:10}}>
+                <div style={{flex:1}}>
+                  <Lbl>会社・所属</Lbl>
+                  <input value={editData.company||""} onChange={e=>setMeta("company",e.target.value)} placeholder="○○商事" style={S.input} />
+                </div>
+                <div style={{flex:1}}>
+                  <Lbl>役職</Lbl>
+                  <input value={editData.role||""} onChange={e=>setMeta("role",e.target.value)} placeholder="営業部長" style={S.input} />
+                </div>
+              </div>
+              <Lbl>カテゴリ</Lbl>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:14}}>
+                {TAGS.map(t=>{
+                  const sel=editData.tag===t; const c=tagColor(t);
+                  return <button key={t} onClick={()=>setMeta("tag",t)}
+                    style={{padding:"7px 12px",borderRadius:20,border:`1.5px solid ${sel?c:"#334155"}`,background:sel?c+"33":"#1e293b",color:sel?c:"#64748b",fontSize:12,fontWeight:sel?700:400,cursor:"pointer"}}>{t}</button>;
+                })}
+              </div>
+              <Lbl>最終接触日</Lbl>
+              <input type="date" value={editData.lastMet||""} onChange={e=>setMeta("lastMet",e.target.value)} style={S.input} />
+
+              <div style={{display:"flex",margin:"4px 0 16px",background:"#1e293b",borderRadius:10,padding:3}}>
+                {TABS.map(t=>(
+                  <button key={t.id} onClick={()=>setActiveTab(t.id)}
+                    style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:activeTab===t.id?"#0f172a":"transparent",color:activeTab===t.id?"#f1f5f9":"#64748b",fontSize:12,fontWeight:activeTab===t.id?700:400,cursor:"pointer"}}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              {currentFields.map(f=>(
+                <div key={f.key}>
+                  <Lbl>{f.icon} {f.key}</Lbl>
+                  {f.type==="select" ? (
+                    <select value={editData.fields[f.key]||""} onChange={e=>setF(f.key,e.target.value)} style={{...S.input,marginBottom:14}}>
+                      <option value="">選択...</option>
+                      {f.options.map(o=><option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : (
+                    <textarea value={editData.fields[f.key]||""} onChange={e=>setF(f.key,e.target.value)}
+                      placeholder={f.placeholder} rows={2} style={{...S.input,resize:"none"}} />
+                  )}
+                </div>
+              ))}
+
+              <button onClick={savePerson}
+                style={{width:"100%",background:ready?"#0ea5e9":"#1e293b",color:ready?"#fff":"#475569",padding:"14px",borderRadius:12,border:"none",fontSize:15,fontWeight:700,cursor:ready?"pointer":"default",marginTop:4,marginBottom:24}}>
+                保存する
+              </button>
+            </div>
+          </div>
+        );
+      }
+      return null;
+    }
+
+    const Lbl = ({children}) => <div style={{color:"#64748b",fontSize:11,marginBottom:5,letterSpacing:1}}>{children}</div>;
+
+    const S = {
+      root:{fontFamily:"'Hiragino Sans','Noto Sans JP',sans-serif",background:"#0f172a",minHeight:"100vh",maxWidth:430,margin:"0 auto",display:"flex",flexDirection:"column"},
+      header:{padding:"20px 16px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"},
+      subLabel:{fontSize:10,color:"#475569",letterSpacing:2},
+      title:{fontSize:22,fontWeight:700,color:"#f8fafc"},
+      addBtn:{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:10,padding:"8px 16px",fontSize:14,fontWeight:700,cursor:"pointer"},
+      backBtn:{background:"none",border:"none",color:"#0ea5e9",fontSize:16,cursor:"pointer",padding:0},
+      editBtn:{background:"#1e293b",color:"#94a3b8",border:"none",borderRadius:8,padding:"7px 14px",fontSize:13,cursor:"pointer"},
+      delBtn:{background:"#7f1d1d33",color:"#f87171",border:"none",borderRadius:8,padding:"7px 14px",fontSize:13,cursor:"pointer"},
+      content:{flex:1,overflowY:"auto",padding:"0 16px 40px"},
+      input:{width:"100%",background:"#1e293b",border:"1px solid #334155",borderRadius:10,padding:"11px 14px",color:"#f1f5f9",fontSize:14,boxSizing:"border-box",outline:"none",marginBottom:14,display:"block",fontFamily:"inherit"},
+      card:{background:"#1e293b",borderRadius:12,padding:"12px 14px",marginBottom:8,display:"flex",alignItems:"center",gap:12,cursor:"pointer"},
+      avatar:{width:44,height:44,borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700,flexShrink:0},
+      avatarLg:{width:58,height:58,borderRadius:16,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,fontWeight:700,flexShrink:0},
+      cardName:{color:"#f1f5f9",fontWeight:600,fontSize:15},
+      badge:{fontSize:11,padding:"2px 8px",borderRadius:6,fontWeight:600},
+      empty:{textAlign:"center",padding:"60px 0",color:"#475569"},
+      detailCard:{background:"#1e293b",borderRadius:10,padding:"12px 14px",marginBottom:8},
+      dLabel:{display:"flex",alignItems:"center",gap:6,color:"#64748b",fontSize:11,marginBottom:5,letterSpacing:1},
+      dVal:{color:"#f1f5f9",fontSize:14,lineHeight:1.6},
+    };
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<KaruteApp />);
+  </script>
+</body>
+</html>
